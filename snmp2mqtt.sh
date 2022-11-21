@@ -73,6 +73,7 @@ MQTTPORT=8883
 MQTTCA=./mosquitto.org.crt
 MQTTUSER=none
 MQTTPASSWORD=justEmpty
+MQTTCLIENTNAME=snmp2mqtt
 MQTTTLSVERSION="tlsv1.2"	# see man mosquitto_pub
 MQTTQOS=1			# see man mosquitto_pub
 MQTTRETAIN=false		# see man mosquitto_pub
@@ -163,6 +164,15 @@ function isHexString() {
 }
 
 
+function isTimeticks () {
+    local oid=$1
+    local equal=$2
+    local type=$3
+    # iso.3.6.1.4.1.318.1.1.1.2.2.3.0 = Timeticks: (1308000) 3:38:00.00
+    [ "$type" == "Timeticks:" ] && echo "yes" || echo "no"
+}
+
+
 function convertHexString2Ascii () {
     hexValues="$*"
     str=""
@@ -217,8 +227,19 @@ function getSNMP() {
                 dbg "value cleanedup: $value"
                 echo "$dataType" "$value" 
             else
-                value="${sensorValueRaw#*:}"
-                dbg "returning value: $value"
+                if [ $(isTimeticks $sensorValueRaw) == 'yes' ]
+                then
+                    # iso.3.6.1.4.1.318.1.1.1.2.2.3.0 = Timeticks: (1308000) 3:38:00.00
+                    # cleanup so that influx can deal with the value
+                    dbg "found timeticks"
+                    value=${sensorValueRaw#*: }
+                    dbg "value=$value"
+                    value=$(echo ${sensorValueRaw#*: } | cut -f1 -d')' | sed -e 's/(//' )
+                    dbg "parse it: $sensorValueRaw --> $value"
+                else
+                    value="${sensorValueRaw#*:}"
+                fi
+                dbg "returning datatype: $dataType  value: $value"
                 echo "$dataType" "$value"
             fi
         fi
@@ -276,6 +297,7 @@ function createConfigFile () {
     echo "MQTTTLSVERSION=$MQTTTLSVERSION">>$snmp2mqttMappingFileName
     echo "MQTTQOS=$MQTTQOS">>$snmp2mqttMappingFileName
     echo "MQTTRETAIN=$MQTTRETAIN">>$snmp2mqttMappingFileName
+    echo "MQTTCLIENTNAME=$MQTTCLIENTNAME">>$snmp2mqttMappingFileName
     echo "# please edit SNMPMappingFile=$SNMPMappingFile">>$snmp2mqttMappingFileName
 } 
 
@@ -316,11 +338,11 @@ function convert2json() {
         INTEGER|Integer|integer|Timeticks|Counter32|Gauge32)
             # use literal
             # only numbers will not be quoted in json
-            echo '{"Time":"'$dateISO8601'","value":'$v'}'
+            echo '{"Time":"' $dateISO8601 '","Datatype":"'$dataType'","value":'$v'}'
 	    ;;
         *)
             # enquote
-            echo '{"Time":"'$dateISO8601'","value":"'$v'"}'
+            echo '{"Time":"'$dateISO8601'","Datatype":"'$dataType'","value":"'$v'"}'
 	    ;;
     esac
 }
@@ -423,6 +445,7 @@ do
        sleep 10
        continue
     fi
+    verb "working with mappingfile $snmp2mqttMappingFile"
     # read settings from currently active conf-file
     SNMPHOST=$(getSNMPHost $snmp2mqttMappingFile)
     dbg "using SNMPHOST=$SNMPHOST"
@@ -467,10 +490,10 @@ do
                     if [ "$MQTTUSER" != "none" ]
                     then
                         dbg "Using MQTTUSER=$MQTTUSER for authentication via SSL"
-                        mosquitto_pub -q $MQTTQOS $RETAIN --cafile "$MQTTCA" --tls-version $MQTTTLSVERSION -u "$MQTTUSER" -P "$MQTTPASSWORD" -h "$MQTTHOST" -p "$MQTTPORT" -t "$mqttTopic" -m "$value"
+                        mosquitto_pub -i $MQTTCLIENTNAME -q $MQTTQOS $RETAIN --cafile "$MQTTCA" --tls-version $MQTTTLSVERSION -u "$MQTTUSER" -P "$MQTTPASSWORD" -h "$MQTTHOST" -p "$MQTTPORT" -t "$mqttTopic" -m "$value"
                     else
                         dbg "unauthenticated but SSL unecrypted access to MQTT server consider configuring MQTTUSER & MQTTPASSWORD"
-                        mosquitto_pub -q $MQTTQOS $RETAIN --cafile "$MQTTCA" --tls-version $MQTTTLSVERSION -h "$MQTTHOST" -p "$MQTTPORT" -t "$mqttTopic" -m "$value"
+                        mosquitto_pub -i $MQTTCLIENTNAME -q $MQTTQOS $RETAIN --cafile "$MQTTCA" --tls-version $MQTTTLSVERSION -h "$MQTTHOST" -p "$MQTTPORT" -t "$mqttTopic" -m "$value"
                     fi
                     verb "published $mqttTopic: $value"
                 else
@@ -478,10 +501,10 @@ do
                     if [ "$MQTTUSER" != "none" ]
                     then
                         dbg "Using MQTTUSER=$MQTTUSER for authentication via SSL"
-                        mosquitto_pub -q $MQTTQOS $RETAIN -u "$MQTTUSER" -P "$MQTTPASSWORD" -h "$MQTTHOST" -p "$MQTTPORT" -t "$mqttTopic" -m "$value"
+                        mosquitto_pub -i $MQTTCLIENTNAME -q $MQTTQOS $RETAIN -u "$MQTTUSER" -P "$MQTTPASSWORD" -h "$MQTTHOST" -p "$MQTTPORT" -t "$mqttTopic" -m "$value"
                     else
                         dbg "unauthenticated and unecrypted access to MQTT server consider configuring MQTTUSER & MQTTPASSWORD"
-                        mosquitto_pub -q $MQTTQOS $RETAIN -h "$MQTTHOST" -p "$MQTTPORT" -t "$mqttTopic" -m "$value"
+                        mosquitto_pub -i $MQTTCLIENTNAME -q $MQTTQOS $RETAIN -h "$MQTTHOST" -p "$MQTTPORT" -t "$mqttTopic" -m "$value"
                     fi
                     verb "published $mqttTopic: $value"
                 fi
