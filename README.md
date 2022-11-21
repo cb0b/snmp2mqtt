@@ -8,7 +8,7 @@ along with a timestamp. This is intended for an easy import via telegraf to infl
 The configuration is done via confgile two files. Alternatively CLI parameters are possible and
 intended for interactive use.  e.g.
 
- ./snmp2mqtt.sh -c myconfFile4snmp2mqtt.conf ./testSNMPObj.conf,./secondTestObject.conf
+ ./snmp2mqtt.sh -c myconfFile4snmp2mqtt.conf ./testSNMPObj.cfg,./secondTestObject.cfg
 
 Both encrypted and unencrypted modes for MQTT are supported via conf file settings. Default is ./snmp2mqtt.conf
 
@@ -39,7 +39,9 @@ Not implemented yet:
  apt install snmp mosquitto-clients
  
 
-To run it with cron for periodic updates on Debian10/Debian11 use
+## periodic execution
+
+Run it with cron for periodic updates on Debian10/Debian11 use
 
  /etc/cron.d/snmp2mqtt
  m  h  dom mon dow user command
