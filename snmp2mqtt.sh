@@ -49,10 +49,10 @@
 #
 #
 # (w) 2022 C::B0b
-# $Id: snmp2mqtt.sh,v 2.8 2022/11/20 16:10:58 robert Exp robert $
+# $Id: snmp2mqtt.sh,v 2.8 2022/11/20 16:10:58$
 # 
 # History:
-# 17.Nov 2022 v2 changed config format to be able to deal with multiple snmp targets in one go
+# 22.Nov 2022 v2 changed config format to be able to deal with multiple snmp targets in one go
 # 15.Nov 2022 v1 first version
 #
 set -u
@@ -73,13 +73,17 @@ MQTTPORT=8883
 MQTTCA=./mosquitto.org.crt
 MQTTUSER=none
 MQTTPASSWORD=justEmpty
-MQTTTLSVERSION="tlsv1.2"
+MQTTTLSVERSION="tlsv1.2"	# see man mosquitto_pub
+MQTTQOS=1			# see man mosquitto_pub
+MQTTRETAIN=false		# see man mosquitto_pub
 
 TMPCFG=/tmp/$$.snmp2mqtt.topicsmapping.txt
+
 
 function dbg() {
     [ $DEBUG = "1" ] && echo "DEBUG:in function ${FUNCNAME[1]} -->  $*" >&2
 }
+
 
 function showVersion() {
     grep ',v' $0 |cut -f2 -d',' | cut -f1-4 -d' ' | head -1
@@ -270,7 +274,9 @@ function createConfigFile () {
     echo "MQTTUSER=$MQTTUSER # can be none">>$snmp2mqttMappingFileName
     echo "MQTTPASSWORD=$MQTTPASSWORD">>$snmp2mqttMappingFileName
     echo "MQTTTLSVERSION=$MQTTTLSVERSION">>$snmp2mqttMappingFileName
-    echo "# SNMPMappingFile=$SNMPMappingFile">>$snmp2mqttMappingFileName
+    echo "MQTTQOS=$MQTTQOS">>$snmp2mqttMappingFileName
+    echo "MQTTRETAIN=$MQTTRETAIN">>$snmp2mqttMappingFileName
+    echo "# please edit SNMPMappingFile=$SNMPMappingFile">>$snmp2mqttMappingFileName
 } 
 
 
@@ -320,6 +326,21 @@ function convert2json() {
 }
 
 
+function formatRetainFlag() {
+   local retainReq=$1
+   if [ $retainReq == "true" ]
+   then
+       echo "-r"
+   else
+       echo " "
+   fi
+}
+
+function verb () {
+    [ $verbose = "1" ] && echo "$*"
+}
+
+
 # --------------------------------------------------------------------------------------
 # main starts here
 
@@ -338,20 +359,20 @@ while getopts ":c:dvh?" options; do
   esac
 done
 shift $(($OPTIND -1))
-[ $verbose = 1 ] && echo "$0 $(showVersion)"
+verb "$0 $(showVersion)"
 
 if [ -f "$snmp2mqttConfFile" ]
 then
     dbg "source configfile $snmp2mqttConfFile"
     source "$snmp2mqttConfFile"
     dbg "set all configured values from $snmp2mqttConfFile"
+    verb "using conffile $snmp2mqttConfFile"
 else
     echo "conffile $snmp2mqttConfFile not found - create it with default values"
     createConfigFile "$snmp2mqttConfFile"
     echo "created $snmp2mqttConfFile - please configure the settings there"
     exit 3
 fi
-[ $verbose = 1 ] && echo "using config file: $snmp2mqttConfFile"
 dbg "sanity checks for MQTT via SSL"
 # verify prereq for MQTT via SSL
 if [ "$MQTT_USE_SSL" == "yes" ]
@@ -361,9 +382,11 @@ then
     then
         echo "ERROR: CA File $MQTTCA for MQTT-SSL not found or not readable - exit" >&2
         exit 3
+    else
+        verb "SSL configured: found CA $MQTTCA"
     fi
 else
-    echo "MQTT cleartext configured - consider to use TLS"
+    verb "MQTT cleartext configured - consider to use TLS"
 fi
 
 # loop over all SNMPMappingFiles defined in the confFile or provieded by CLI
@@ -437,29 +460,30 @@ do
                 fi
                 value=$(convert2json "$value" "$dataType")
                 dbg "publish Topic -> $mqttTopic  value -> $value"
+                RETAIN=$(formatRetainFlag $MQTTRETAIN)
                 if [ "$MQTT_USE_SSL" == "yes" ]
                 then
                     dbg "using mqtt via SSL: Server=$MQTTHOST CAFile=$MQTTCA port=$MQTTPORT"
                     if [ "$MQTTUSER" != "none" ]
                     then
                         dbg "Using MQTTUSER=$MQTTUSER for authentication via SSL"
-                        mosquitto_pub --cafile "$MQTTCA" --tls-version $MQTTTLSVERSION -u "$MQTTUSER" -P "$MQTTPASSWORD" -h "$MQTTHOST" -p "$MQTTPORT" -t "$mqttTopic" -m "$value"
+                        mosquitto_pub -q $MQTTQOS $RETAIN --cafile "$MQTTCA" --tls-version $MQTTTLSVERSION -u "$MQTTUSER" -P "$MQTTPASSWORD" -h "$MQTTHOST" -p "$MQTTPORT" -t "$mqttTopic" -m "$value"
                     else
                         dbg "unauthenticated but SSL unecrypted access to MQTT server consider configuring MQTTUSER & MQTTPASSWORD"
-                        mosquitto_pub --cafile "$MQTTCA" --tls-version $MQTTTLSVERSION -h "$MQTTHOST" -p "$MQTTPORT" -t "$mqttTopic" -m "$value"
+                        mosquitto_pub -q $MQTTQOS $RETAIN --cafile "$MQTTCA" --tls-version $MQTTTLSVERSION -h "$MQTTHOST" -p "$MQTTPORT" -t "$mqttTopic" -m "$value"
                     fi
-                    [ $verbose -eq 1 ] && echo "published $mqttTopic: $value"
+                    verb "published $mqttTopic: $value"
                 else
                     dbg "using mqtt clear-text: Server=$MQTTHOST port=$MQTTPORT"
                     if [ "$MQTTUSER" != "none" ]
                     then
                         dbg "Using MQTTUSER=$MQTTUSER for authentication via SSL"
-                        mosquitto_pub -u "$MQTTUSER" -P "$MQTTPASSWORD" -h "$MQTTHOST" -p "$MQTTPORT" -t "$mqttTopic" -m "$value"
+                        mosquitto_pub -q $MQTTQOS $RETAIN -u "$MQTTUSER" -P "$MQTTPASSWORD" -h "$MQTTHOST" -p "$MQTTPORT" -t "$mqttTopic" -m "$value"
                     else
                         dbg "unauthenticated and unecrypted access to MQTT server consider configuring MQTTUSER & MQTTPASSWORD"
-                        mosquitto_pub -h "$MQTTHOST" -p "$MQTTPORT" -t "$mqttTopic" -m "$value"
+                        mosquitto_pub -q $MQTTQOS $RETAIN -h "$MQTTHOST" -p "$MQTTPORT" -t "$mqttTopic" -m "$value"
                     fi
-                    [ $verbose -eq 1 ] && echo "published $mqttTopic: $value"
+                    verb "published $mqttTopic: $value"
                 fi
             fi
         fi
