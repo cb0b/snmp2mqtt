@@ -25,8 +25,10 @@ The mapping file contains the OIDs of the device under examination. Typically ve
 corresponding description of each OID. This is the source for the mapping file.
 The format is:
 
+```
  OID				mqttTopic			 mapping for e.g. values to human-readable
  .1.3.6.1.4.1.14848.2.1.2.1.3.1 messpc/sensors/1/nSensorType     map:1=Test,2=test2
+```
 
 The mibbrowser from ireasoning is working quite well. There is a personal edition available at 
 https://www.ireasoning.com/download.shtml
@@ -36,16 +38,23 @@ Not implemented yet:
  - use SNMPv3
 
 ## Packages needed on Debian:
+```
  apt install snmp mosquitto-clients
+```
  
 
 ## periodic execution
 
-Run it with cron for periodic updates on Debian10/Debian11 use
+Run it with cron for periodic updates 
+
+on Debian10/Debian11 use
+
 
  /etc/cron.d/snmp2mqtt
+```
  m  h  dom mon dow user command
  */5 *  *   *   *   cb  /home/cb/snmp2mqtt >/dev/null
+```
 
-This will run every 5 minuted doing the update.
+This will run snmp2mqtt every 5 minutes doing the update.
 
