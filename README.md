@@ -35,16 +35,15 @@ To deal with MQTT I use the MQTT-Explorer which works really nice. (http://mqtt-
 Not implemented yet:
  - use SNMPv3
 
-Packages needed on Debian:
+## Packages needed on Debian:
  apt install snmp mosquitto-clients
- home is at ~/projects/snmp2mqtt
  
+
 To run it with cron for periodic updates on Debian10/Debian11 use
- ---
+
  /etc/cron.d/snmp2mqtt
  m  h  dom mon dow user command
  */5 *  *   *   *   cb  /home/cb/snmp2mqtt >/dev/null
- ---
-This will run every 5 minuted doing the update.
 
+This will run every 5 minuted doing the update.
 
