@@ -338,7 +338,7 @@ function convert2json() {
         INTEGER|Integer|integer|Timeticks|Counter32|Gauge32)
             # use literal
             # only numbers will not be quoted in json
-            echo '{"Time":"' $dateISO8601 '","Datatype":"'$dataType'","value":'$v'}'
+            echo '{"Time":"'$dateISO8601'","Datatype":"'$dataType'","value":'$v'}'
 	    ;;
         *)
             # enquote
