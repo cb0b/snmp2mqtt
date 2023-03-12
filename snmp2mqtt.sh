@@ -11,7 +11,9 @@
 # configure it in ./snmp2mqtt.conf
 # examples are provided in the config-file. This assumes of course the mqtt broker has already been configured
 # for TLS.
-# For mosquitto,org download the CA certificate from https://test.mosquitto.org/ssl/mosquitto.org.crt
+# To be able to use mTLS configure in ./snmp2mqtt.conf: MQTTUseClientCert,MQTTClientCert,MQTTClientKey 
+# HINT: the hostname MUST match the CN in the certificate!!
+# For mosquitto.org download the CA certificate from https://test.mosquitto.org/ssl/mosquitto.org.crt
 # The username and password for MQTT can be empty for public (without auth) access to the broker. (This is intended
 # to make it easier to do a quick test).
 # Format of the mapping file:
@@ -48,12 +50,15 @@
 # sudo dpkg-reconfigure locales
 #
 #
-# (w) 2022 C::B0b
-# $Id: snmp2mqtt.sh,v 2.8 2022/11/20 16:10:58$
-# 
+# (w) 2022 C::B0b - 0C:00:00:00:00:00:0b:0b
+
+VERSION="2.2 Mar,12th 2023"
+  
 # History:
-# 22.Nov 2022 v2 changed config format to be able to deal with multiple snmp targets in one go
-# 15.Nov 2022 v1 first version
+# 12.Mrz 2023 v2.2 added check for open 161/udp to avoid timeouts in later use of snmp* commands
+# 23.Dez 2022 v2.1 added using client certificate for authenticaton against mqtt-server
+# 22.Nov 2022 v2.0 changed config format to be able to deal with multiple snmp targets in one go
+# 15.Nov 2022 v1.0 first version
 #
 set -u
 # set -e  # errorhandling
@@ -64,19 +69,27 @@ DEBUG=${DEBUG:=0}
 SNMPHOST=test.mosquitto.org
 SNMPCOMMUNITY=public
 SNMPVERSION=1 
+
 #configfile mapping OIDs to MQTT topics
 SNMPMappingFile=./configTopics.conf
 
 MQTTHOST=test.mosquitto.org
-MQTT_USE_SSL="yes"
-MQTTPORT=8883
-MQTTCA=./mosquitto.org.crt
 MQTTUSER=none
 MQTTPASSWORD=justEmpty
+
 MQTTCLIENTNAME=snmp2mqtt
-MQTTTLSVERSION="tlsv1.2"	# see man mosquitto_pub
 MQTTQOS=1			# see man mosquitto_pub
 MQTTRETAIN=false		# see man mosquitto_pub
+
+MQTT_USE_SSL="yes"
+MQTTTLSVERSION="tlsv1.2"	# see man mosquitto_pub
+MQTTCA=./mosquitto.org.crt
+MQTTPORT=8883
+MQTTUseClientCert=0
+# MQTTCLIENTNAME must match CN in the client certificate
+MQTTClientCert=./client-cert.pem
+MQTTClientKey=./client-key.pem	# key must not be encrypted
+
 
 TMPCFG=/tmp/$$.snmp2mqtt.topicsmapping.txt
 
@@ -87,14 +100,15 @@ function dbg() {
 
 
 function showVersion() {
-    grep ',v' $0 |cut -f2 -d',' | cut -f1-4 -d' ' | head -1
+    echo "$VERSION"
+    # grep ',v' $0 |cut -f2 -d',' | cut -f1-4 -d' ' | head -1
     # egrep -A1 '^#.*History' sync2bak | tail -1 | cut -f2 -d'#' | cut -f2-4 -d' '
 }
 
 
 function usage() {
     local configFileName=$1
-    echo "$0 [-d][-v][-c configFile.conf] [./snmp2mqttMapping.conf[,./snmp2mqttMapping2.conf]] | [-h|?]"
+    echo "$0 [-d][-v][-c configFile.conf] [./snmp2mqttMapping.conf[,./snmp2mqttMappingN.conf]] | [-h|?]"
     echo "Version: $(showVersion)"
     echo "  -v be verbose. This in intended for interactive use"
     echo "  -d enable DEBUG mode"
@@ -105,6 +119,17 @@ function usage() {
     echo "Configure MQTT related parameters in $configFileName along with the reference to the mapping files"
 }
 
+
+function isReachable() {
+    local snmpServer=$1
+    rc=$(nmap -sP $snmpServer | grep Host | grep -i down)
+    if [ $? -eq 0 ]
+    then
+        echo "down"
+    else
+        echo "up"
+    fi
+}
 
 function cleanupMappingFile () {
     local snmp2mqttMappingFile=$1
@@ -289,9 +314,12 @@ function createConfigFile () {
     local snmp2mqttMappingFileName=$1
     echo "# configfile for $0 created $(date) on $(hostname) /C::B0b" >$snmp2mqttMappingFileName
     echo "MQTTHOST=$MQTTHOST">>$snmp2mqttMappingFileName
-    echo "MQTT_USE_SSL=$MQTT_USE_SSL # or no">>$snmp2mqttMappingFileName
+    echo "MQTT_USE_SSL=$MQTT_USE_SSL # yes or no">>$snmp2mqttMappingFileName
     echo "MQTTCA=$MQTTCA">>$snmp2mqttMappingFileName
-    echo "MQTTPORT=$MQTTPORT # 1883 for unencryoted and 8883 for SSL">>$snmp2mqttMappingFileName
+    echo "MQTTUseClientCert=$MQTTUseClientCert # use 1 to enable or 0 to disable">>$snmp2mqttMappingFileName
+    echo "# MQTTClientCert=$MQTTClientCert">>$snmp2mqttMappingFileName
+    echo "# MQTTClientKey=$MQTTClientKey">>$snmp2mqttMappingFileName
+    echo "MQTTPORT=$MQTTPORT # 1883 for unencrypted and 8883 for SSL">>$snmp2mqttMappingFileName
     echo "MQTTUSER=$MQTTUSER # can be none">>$snmp2mqttMappingFileName
     echo "MQTTPASSWORD=$MQTTPASSWORD">>$snmp2mqttMappingFileName
     echo "MQTTTLSVERSION=$MQTTTLSVERSION">>$snmp2mqttMappingFileName
@@ -448,6 +476,12 @@ do
     verb "working with mappingfile $snmp2mqttMappingFile"
     # read settings from currently active conf-file
     SNMPHOST=$(getSNMPHost $snmp2mqttMappingFile)
+    rc=$(isReachable $SNMPHOST)
+    if [ $rc != "up" ] 
+    then
+         echo "WARNING - Host $SNMPHOST seems to be down - skiping" >&2
+         continue
+    fi
     dbg "using SNMPHOST=$SNMPHOST"
     SNMPCOMMUNITY=$(getSNMPcommunity $snmp2mqttMappingFile)
     dbg "using SNMPCOMMUNITY=$SNMPCOMMUNITY"
@@ -486,14 +520,20 @@ do
                 RETAIN=$(formatRetainFlag $MQTTRETAIN)
                 if [ "$MQTT_USE_SSL" == "yes" ]
                 then
+                    if [ $MQTTUseClientCert == "1" ]
+                    then
+                        USECLIENTCERT="--cert $MQTTClientCert --key $MQTTClientKey "
+                    else
+                        USECLIENTCERT=""
+                    fi
                     dbg "using mqtt via SSL: Server=$MQTTHOST CAFile=$MQTTCA port=$MQTTPORT"
                     if [ "$MQTTUSER" != "none" ]
                     then
                         dbg "Using MQTTUSER=$MQTTUSER for authentication via SSL"
-                        mosquitto_pub -i $MQTTCLIENTNAME -q $MQTTQOS $RETAIN --cafile "$MQTTCA" --tls-version $MQTTTLSVERSION -u "$MQTTUSER" -P "$MQTTPASSWORD" -h "$MQTTHOST" -p "$MQTTPORT" -t "$mqttTopic" -m "$value"
+                        mosquitto_pub -i $MQTTCLIENTNAME -q $MQTTQOS $RETAIN --cafile "$MQTTCA" $USECLIENTCERT --tls-version $MQTTTLSVERSION -u "$MQTTUSER" -P "$MQTTPASSWORD" -h "$MQTTHOST" -p "$MQTTPORT" -t "$mqttTopic" -m "$value"
                     else
                         dbg "unauthenticated but SSL unecrypted access to MQTT server consider configuring MQTTUSER & MQTTPASSWORD"
-                        mosquitto_pub -i $MQTTCLIENTNAME -q $MQTTQOS $RETAIN --cafile "$MQTTCA" --tls-version $MQTTTLSVERSION -h "$MQTTHOST" -p "$MQTTPORT" -t "$mqttTopic" -m "$value"
+                        mosquitto_pub -i $MQTTCLIENTNAME -q $MQTTQOS $RETAIN --cafile "$MQTTCA" $USECLIENTCERT --tls-version $MQTTTLSVERSION -h "$MQTTHOST" -p "$MQTTPORT" -t "$mqttTopic" -m "$value"
                     fi
                     verb "published $mqttTopic: $value"
                 else
